@@ -22,6 +22,11 @@ if (!BOT_TOKEN || !BACKEND_URL || !DATABASE_URL) {
 const bot  = new Telegraf(BOT_TOKEN);
 const pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
+// Global error handler — prevents unhandled errors from crashing polling
+bot.catch((err: any, ctx: any) => {
+  console.error(`Bot error [${ctx?.updateType}]:`, err?.message ?? err);
+});
+
 // Tracks last known status per order to detect transitions
 const orderStatusMap = new Map<number, string>();
 let ready = false;
@@ -283,10 +288,15 @@ const reportKeyboard = Markup.keyboard([
 // ── Bot commands ──────────────────────────────────────────────────────────────
 
 bot.start(async (ctx) => {
-  await ctx.reply(
-    `👋 <b>Город Мастеров — Info Bot</b>\n\nВы будете получать уведомления о новых заказах, оплатах и назначениях мастеров.`,
-    { parse_mode: 'HTML', ...mainKeyboard },
-  );
+  try {
+    await ctx.reply(
+      `👋 <b>Город Мастеров — Info Bot</b>\n\nВы будете получать уведомления о новых заказах, оплатах и назначениях мастеров.`,
+      { parse_mode: 'HTML', ...mainKeyboard },
+    );
+  } catch (err: any) {
+    console.error('/start reply error:', err.message);
+    return;
+  }
   try {
     await addSubscriber(ctx.chat.id);
     console.log(`Subscriber added: ${ctx.chat.id}`);
@@ -345,14 +355,22 @@ async function main() {
     resolve();
   }));
 
-  // 2. Delete webhook (in case it was set before), then launch polling
+  // 2. Delete webhook then start polling with auto-restart on timeout
   try {
     await bot.telegram.deleteWebhook({ drop_pending_updates: true });
     console.log('Webhook deleted');
   } catch (err: any) {
     console.error('deleteWebhook error:', err.message);
   }
-  bot.launch().catch((err) => console.error('Bot launch error:', err.message));
+
+  function launchBot() {
+    bot.launch().catch((err: any) => {
+      console.error('Bot polling error:', err?.message ?? err);
+      console.log('Restarting polling in 3s...');
+      setTimeout(launchBot, 3000);
+    });
+  }
+  launchBot();
   console.log('Info Bot is running 🚀');
 
   // 3. Async init in background — does not block healthcheck
