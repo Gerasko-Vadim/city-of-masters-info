@@ -176,12 +176,19 @@ function periodLabel(period: 'today' | 'week' | 'month'): string {
 
 async function buildReport(period: 'today' | 'week' | 'month'): Promise<string> {
   const since = periodStart(period);
+  console.log(`Building report [${period}] since:`, since.toISOString());
 
-  const [ordersRes, specsRes, clientsRes] = await Promise.all([
-    pool.query(`SELECT status FROM "order" WHERE "createdAt" >= $1`, [since]),
-    pool.query(`SELECT id FROM specialists WHERE "createdAt" >= $1`, [since]),
-    pool.query(`SELECT id FROM client WHERE "createdAt" >= $1`, [since]),
-  ]);
+  // Run queries one by one so we know which one fails
+  const ordersRes   = await pool.query(`SELECT status FROM "order" WHERE "createdAt" >= $1`, [since]);
+  const specsRes    = await pool.query(`SELECT id FROM specialists WHERE "createdAt" >= $1`, [since]);
+
+  // client table: try both possible names
+  let clientsRes;
+  try {
+    clientsRes = await pool.query(`SELECT id FROM client WHERE "createdAt" >= $1`, [since]);
+  } catch {
+    clientsRes = await pool.query(`SELECT id FROM clients WHERE "createdAt" >= $1`, [since]);
+  }
 
   const orders     = ordersRes.rows;
   const total      = orders.length;
@@ -311,8 +318,8 @@ async function handleReport(ctx: any, period: 'today' | 'week' | 'month') {
     const msg = await buildReport(period);
     await ctx.reply(msg, { parse_mode: 'HTML', ...reportKeyboard });
   } catch (err: any) {
-    await ctx.reply('❌ Ошибка при формировании отчёта. Попробуйте позже.');
     console.error('Report error:', err.message);
+    await ctx.reply(`❌ Ошибка: ${err.message}`);
   }
 }
 
@@ -380,7 +387,7 @@ async function main() {
       await preloadOrderStatuses();
       ready = true;
       connectSocket();
-      cron.schedule('55 23 * * *', sendDailyReport, { timezone: 'Asia/Bishkek' });
+      cron.schedule('0 20 * * *', sendDailyReport, { timezone: 'Asia/Bishkek' });
       console.log('✅ Init complete');
     } catch (err: any) {
       console.error('Init error:', err.message);
