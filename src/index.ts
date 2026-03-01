@@ -270,26 +270,22 @@ function connectSocket() {
 
 // ── Keyboards ─────────────────────────────────────────────────────────────────
 
-const mainMenu = Markup.inlineKeyboard([
-  [Markup.button.callback('📊 Отчёт', 'menu_report')],
-  [Markup.button.callback('🔕 Отписаться', 'menu_unsubscribe')],
-]);
+const mainKeyboard = Markup.keyboard([
+  ['📊 Отчёт'],
+  ['🔕 Отписаться'],
+]).resize();
 
-const reportMenu = Markup.inlineKeyboard([
-  [
-    Markup.button.callback('📅 Сегодня', 'report_today'),
-    Markup.button.callback('📆 Неделя',  'report_week'),
-    Markup.button.callback('🗓 Месяц',   'report_month'),
-  ],
-  [Markup.button.callback('← Назад', 'menu_back')],
-]);
+const reportKeyboard = Markup.keyboard([
+  ['📅 Сегодня', '📆 Неделя', '🗓 Месяц'],
+  ['← Назад'],
+]).resize();
 
 // ── Bot commands ──────────────────────────────────────────────────────────────
 
 bot.start(async (ctx) => {
   await ctx.reply(
     `👋 <b>Город Мастеров — Info Bot</b>\n\nВы будете получать уведомления о новых заказах, оплатах и назначениях мастеров.`,
-    { parse_mode: 'HTML', ...mainMenu },
+    { parse_mode: 'HTML', ...mainKeyboard },
   );
   try {
     await addSubscriber(ctx.chat.id);
@@ -299,46 +295,37 @@ bot.start(async (ctx) => {
   }
 });
 
-// Main menu actions
-bot.action('menu_report', async (ctx) => {
-  await ctx.answerCbQuery();
-  await ctx.editMessageText('📊 Выберите период:', reportMenu);
+bot.hears('📊 Отчёт', async (ctx) => {
+  await ctx.reply('📊 Выберите период:', reportKeyboard);
 });
 
-bot.action('menu_unsubscribe', async (ctx) => {
-  await ctx.answerCbQuery();
-  await ctx.editMessageText('🔕 Вы отписались от уведомлений.\n\nНапишите /start чтобы подписаться снова.');
+bot.hears('🔕 Отписаться', async (ctx) => {
+  await ctx.reply('🔕 Вы отписались от уведомлений.\n\nНапишите /start чтобы подписаться снова.', Markup.removeKeyboard());
   try {
-    await removeSubscriber(ctx.chat!.id);
+    await removeSubscriber(ctx.chat.id);
   } catch (err: any) {
     console.error('Failed to remove subscriber:', err.message);
   }
 });
 
-bot.action('menu_back', async (ctx) => {
-  await ctx.answerCbQuery();
-  await ctx.editMessageText(
-    `👋 <b>Город Мастеров — Info Bot</b>\n\nВы будете получать уведомления о новых заказах, оплатах и назначениях мастеров.`,
-    { parse_mode: 'HTML', ...mainMenu },
-  );
+bot.hears('← Назад', async (ctx) => {
+  await ctx.reply('Главное меню:', { ...mainKeyboard });
 });
 
-// Report period actions
 async function handleReport(ctx: any, period: 'today' | 'week' | 'month') {
-  await ctx.answerCbQuery();
-  await ctx.editMessageText('⏳ Генерирую отчёт...');
+  await ctx.reply('⏳ Генерирую отчёт...');
   try {
     const msg = await buildReport(period);
-    await ctx.editMessageText(msg, { parse_mode: 'HTML', ...reportMenu });
+    await ctx.reply(msg, { parse_mode: 'HTML', ...reportKeyboard });
   } catch (err: any) {
-    await ctx.editMessageText('❌ Ошибка при формировании отчёта. Попробуйте позже.', reportMenu);
+    await ctx.reply('❌ Ошибка при формировании отчёта. Попробуйте позже.');
     console.error('Report error:', err.message);
   }
 }
 
-bot.action('report_today', (ctx) => handleReport(ctx, 'today'));
-bot.action('report_week',  (ctx) => handleReport(ctx, 'week'));
-bot.action('report_month', (ctx) => handleReport(ctx, 'month'));
+bot.hears('📅 Сегодня', (ctx) => handleReport(ctx, 'today'));
+bot.hears('📆 Неделя',  (ctx) => handleReport(ctx, 'week'));
+bot.hears('🗓 Месяц',   (ctx) => handleReport(ctx, 'month'));
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
