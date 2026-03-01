@@ -1,4 +1,4 @@
-import { Telegraf } from 'telegraf';
+import { Telegraf, Markup } from 'telegraf';
 import * as dotenv from 'dotenv';
 import express from 'express';
 import { io as socketIO } from 'socket.io-client';
@@ -137,53 +137,71 @@ async function getSpecialist(telegramId: string | number) {
   }
 }
 
-// ── Daily report ──────────────────────────────────────────────────────────────
+// ── Report ────────────────────────────────────────────────────────────────────
 
-function bishkekMidnight(): Date {
+function periodStart(period: 'today' | 'week' | 'month'): Date {
   const now = new Date();
-  const bskString = now.toLocaleString('en-US', { timeZone: 'Asia/Bishkek' });
-  const bsk = new Date(bskString);
-  bsk.setHours(0, 0, 0, 0);
-  // Offset between local (UTC) and Bishkek for this instant
-  const localMs  = now.getTime();
-  const bskMs    = new Date(bskString).getTime();
-  const offsetMs = localMs - bskMs; // positive when local is ahead of Bishkek
-  return new Date(bsk.getTime() + offsetMs);
+  // Get current date in Bishkek timezone
+  const bskStr = now.toLocaleString('en-US', { timeZone: 'Asia/Bishkek' });
+  const bsk = new Date(bskStr);
+
+  if (period === 'today') {
+    bsk.setHours(0, 0, 0, 0);
+  } else if (period === 'week') {
+    bsk.setHours(0, 0, 0, 0);
+    bsk.setDate(bsk.getDate() - bsk.getDay() + (bsk.getDay() === 0 ? -6 : 1)); // Mon
+  } else {
+    bsk.setHours(0, 0, 0, 0);
+    bsk.setDate(1);
+  }
+
+  // Convert Bishkek time back to UTC
+  const utcOffset = now.getTime() - new Date(bskStr).getTime();
+  return new Date(bsk.getTime() + utcOffset);
+}
+
+function periodLabel(period: 'today' | 'week' | 'month'): string {
+  const now = new Date();
+  if (period === 'today') {
+    return now.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'Asia/Bishkek' });
+  }
+  if (period === 'week') return 'эту неделю';
+  return now.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric', timeZone: 'Asia/Bishkek' });
+}
+
+async function buildReport(period: 'today' | 'week' | 'month'): Promise<string> {
+  const since = periodStart(period);
+
+  const [ordersRes, specsRes, clientsRes] = await Promise.all([
+    pool.query(`SELECT status FROM "order" WHERE "createdAt" >= $1`, [since]),
+    pool.query(`SELECT id FROM specialists WHERE "createdAt" >= $1`, [since]),
+    pool.query(`SELECT id FROM client WHERE "createdAt" >= $1`, [since]),
+  ]);
+
+  const orders     = ordersRes.rows;
+  const total      = orders.length;
+  const newCount   = orders.filter((o) => o.status === 'NEW').length;
+  const paid       = orders.filter((o) => ['PAID', 'IN_PROGRESS', 'COMPLETED'].includes(o.status)).length;
+  const inProgress = orders.filter((o) => o.status === 'IN_PROGRESS').length;
+  const completed  = orders.filter((o) => o.status === 'COMPLETED').length;
+  const newSpecs   = specsRes.rows.length;
+  const newClients = clientsRes.rows.length;
+
+  return (
+    `📊 <b>Отчёт за ${periodLabel(period)}</b>\n\n` +
+    `📦 Заказов получено:  <b>${total}</b>\n` +
+    `🆕 Без оплаты:         <b>${newCount}</b>\n` +
+    `✅ Оплачено:           <b>${paid}</b>\n` +
+    `🔧 В работе:           <b>${inProgress}</b>\n` +
+    `🏁 Завершено:          <b>${completed}</b>\n\n` +
+    `👷 Новых мастеров:  <b>${newSpecs}</b>\n` +
+    `👤 Новых клиентов:  <b>${newClients}</b>`
+  );
 }
 
 async function sendDailyReport() {
   try {
-    const since = bishkekMidnight();
-
-    const [ordersRes, specsRes, clientsRes] = await Promise.all([
-      pool.query(`SELECT status FROM "order" WHERE "createdAt" >= $1`, [since]),
-      pool.query(`SELECT id FROM specialists WHERE "createdAt" >= $1`, [since]),
-      pool.query(`SELECT id FROM client WHERE "createdAt" >= $1`, [since]),
-    ]);
-
-    const orders     = ordersRes.rows;
-    const total      = orders.length;
-    const newCount   = orders.filter((o) => o.status === 'NEW').length;
-    const paid       = orders.filter((o) => ['PAID', 'IN_PROGRESS', 'COMPLETED'].includes(o.status)).length;
-    const inProgress = orders.filter((o) => o.status === 'IN_PROGRESS').length;
-    const completed  = orders.filter((o) => o.status === 'COMPLETED').length;
-    const newSpecs   = specsRes.rows.length;
-    const newClients = clientsRes.rows.length;
-
-    const dateStr = new Date().toLocaleDateString('ru-RU', {
-      day: 'numeric', month: 'long', timeZone: 'Asia/Bishkek',
-    });
-
-    const msg =
-      `📊 <b>Отчёт за ${dateStr}</b>\n\n` +
-      `📦 Заказов получено:  <b>${total}</b>\n` +
-      `🆕 Без оплаты:         <b>${newCount}</b>\n` +
-      `✅ Оплачено:           <b>${paid}</b>\n` +
-      `🔧 В работе:           <b>${inProgress}</b>\n` +
-      `🏁 Завершено:          <b>${completed}</b>\n\n` +
-      `👷 Новых мастеров:  <b>${newSpecs}</b>\n` +
-      `👤 Новых клиентов:  <b>${newClients}</b>`;
-
+    const msg = await buildReport('today');
     await broadcast(msg);
     console.log('Daily report sent');
   } catch (err: any) {
@@ -250,13 +268,28 @@ function connectSocket() {
   });
 }
 
+// ── Keyboards ─────────────────────────────────────────────────────────────────
+
+const mainMenu = Markup.inlineKeyboard([
+  [Markup.button.callback('📊 Отчёт', 'menu_report')],
+  [Markup.button.callback('🔕 Отписаться', 'menu_unsubscribe')],
+]);
+
+const reportMenu = Markup.inlineKeyboard([
+  [
+    Markup.button.callback('📅 Сегодня', 'report_today'),
+    Markup.button.callback('📆 Неделя',  'report_week'),
+    Markup.button.callback('🗓 Месяц',   'report_month'),
+  ],
+  [Markup.button.callback('← Назад', 'menu_back')],
+]);
+
 // ── Bot commands ──────────────────────────────────────────────────────────────
 
 bot.start(async (ctx) => {
-  // Reply first — never fail silently
   await ctx.reply(
-    `✅ <b>Подписка оформлена!</b>\n\nТеперь вы будете получать уведомления о заказах и ежедневный отчёт.\n\n/stop — отписаться\n/report — отчёт прямо сейчас`,
-    { parse_mode: 'HTML' },
+    `👋 <b>Город Мастеров — Info Bot</b>\n\nВы будете получать уведомления о новых заказах, оплатах и назначениях мастеров.`,
+    { parse_mode: 'HTML', ...mainMenu },
   );
   try {
     await addSubscriber(ctx.chat.id);
@@ -266,19 +299,46 @@ bot.start(async (ctx) => {
   }
 });
 
-bot.command('stop', async (ctx) => {
-  await ctx.reply('🔕 Вы отписались от уведомлений. Напишите /start чтобы подписаться снова.');
+// Main menu actions
+bot.action('menu_report', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText('📊 Выберите период:', reportMenu);
+});
+
+bot.action('menu_unsubscribe', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText('🔕 Вы отписались от уведомлений.\n\nНапишите /start чтобы подписаться снова.');
   try {
-    await removeSubscriber(ctx.chat.id);
+    await removeSubscriber(ctx.chat!.id);
   } catch (err: any) {
     console.error('Failed to remove subscriber:', err.message);
   }
 });
 
-bot.command('report', async (ctx) => {
-  await ctx.reply('Генерирую отчёт...');
-  await sendDailyReport();
+bot.action('menu_back', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText(
+    `👋 <b>Город Мастеров — Info Bot</b>\n\nВы будете получать уведомления о новых заказах, оплатах и назначениях мастеров.`,
+    { parse_mode: 'HTML', ...mainMenu },
+  );
 });
+
+// Report period actions
+async function handleReport(ctx: any, period: 'today' | 'week' | 'month') {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText('⏳ Генерирую отчёт...');
+  try {
+    const msg = await buildReport(period);
+    await ctx.editMessageText(msg, { parse_mode: 'HTML', ...reportMenu });
+  } catch (err: any) {
+    await ctx.editMessageText('❌ Ошибка при формировании отчёта. Попробуйте позже.', reportMenu);
+    console.error('Report error:', err.message);
+  }
+}
+
+bot.action('report_today', (ctx) => handleReport(ctx, 'today'));
+bot.action('report_week',  (ctx) => handleReport(ctx, 'week'));
+bot.action('report_month', (ctx) => handleReport(ctx, 'month'));
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
