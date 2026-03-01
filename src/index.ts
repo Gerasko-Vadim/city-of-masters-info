@@ -275,23 +275,32 @@ bot.command('report', async (ctx) => {
 async function main() {
   console.log('Starting City of Masters Info Bot...');
 
-  await ensureSubscribersTable();
-  await preloadOrderStatuses();
-  ready = true;
-
-  connectSocket();
-
-  // Daily report at 23:55 Bishkek time
-  cron.schedule('55 23 * * *', sendDailyReport, { timezone: 'Asia/Bishkek' });
-
-  // Express healthcheck for Railway
+  // 1. Start Express FIRST so Railway healthcheck passes immediately
   const app = express();
-  app.get('/health', (_, res) => res.json({ status: 'ok', orders: orderStatusMap.size }));
+  app.get('/health', (_, res) => res.json({ status: 'ok', ready, orders: orderStatusMap.size }));
   const PORT = process.env.PORT || 3005;
-  app.listen(PORT, () => console.log(`Health check on :${PORT}`));
+  await new Promise<void>((resolve) => app.listen(PORT, () => {
+    console.log(`Health check on :${PORT}`);
+    resolve();
+  }));
 
+  // 2. Bot launch (non-blocking Telegram polling)
   bot.launch();
   console.log('Info Bot is running 🚀');
+
+  // 3. Async init in background — does not block healthcheck
+  (async () => {
+    try {
+      await ensureSubscribersTable();
+      await preloadOrderStatuses();
+      ready = true;
+      connectSocket();
+      cron.schedule('55 23 * * *', sendDailyReport, { timezone: 'Asia/Bishkek' });
+      console.log('✅ Init complete');
+    } catch (err: any) {
+      console.error('Init error:', err.message);
+    }
+  })();
 
   process.once('SIGINT', () => { bot.stop('SIGINT'); process.exit(0); });
   process.once('SIGTERM', () => { bot.stop('SIGTERM'); process.exit(0); });
