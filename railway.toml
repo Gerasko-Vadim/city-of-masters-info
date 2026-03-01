@@ -1,0 +1,7 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "npm run build && npm run serve"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
