@@ -234,7 +234,44 @@ async function buildReport(period: 'today' | 'week' | 'month'): Promise<string> 
   );
 }
 
-async function sendDailyReport() {
+async function sendScheduledReports() {
+  // Current date in Bishkek
+  const BSK = 6 * 60 * 60 * 1000;
+  const bskNow = new Date(Date.now() + BSK);
+  const dow       = bskNow.getUTCDay();   // 0=Sun
+  const dayOfMonth = bskNow.getUTCDate();
+  const lastDayOfMonth = new Date(Date.UTC(
+    bskNow.getUTCFullYear(), bskNow.getUTCMonth() + 1, 0
+  )).getUTCDate();
+
+  const isLastDayOfMonth = dayOfMonth === lastDayOfMonth;
+  const isSunday         = dow === 0;
+
+  // Monthly report — last day of month (takes priority, sent instead of weekly)
+  if (isLastDayOfMonth) {
+    try {
+      const msg = await buildReport('month');
+      await broadcast(msg);
+      console.log('Monthly report sent');
+    } catch (err: any) {
+      console.error('Monthly report failed:', err.message);
+    }
+    return; // skip weekly/daily if monthly was sent
+  }
+
+  // Weekly report — every Sunday
+  if (isSunday) {
+    try {
+      const msg = await buildReport('week');
+      await broadcast(msg);
+      console.log('Weekly report sent');
+    } catch (err: any) {
+      console.error('Weekly report failed:', err.message);
+    }
+    return; // skip daily if weekly was sent
+  }
+
+  // Daily report — every other day
   try {
     const msg = await buildReport('today');
     await broadcast(msg);
@@ -410,7 +447,8 @@ async function main() {
       await preloadOrderStatuses();
       ready = true;
       connectSocket();
-      cron.schedule('0 20 * * *', sendDailyReport, { timezone: 'Asia/Bishkek' });
+      // 20:00 Bishkek every day — decides which report to send automatically
+  cron.schedule('0 20 * * *', sendScheduledReports, { timezone: 'Asia/Bishkek' });
       console.log('✅ Init complete');
     } catch (err: any) {
       console.error('Init error:', err.message);
