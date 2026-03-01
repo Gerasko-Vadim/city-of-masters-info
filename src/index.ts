@@ -253,16 +253,26 @@ function connectSocket() {
 // ── Bot commands ──────────────────────────────────────────────────────────────
 
 bot.start(async (ctx) => {
-  await addSubscriber(ctx.chat.id);
+  // Reply first — never fail silently
   await ctx.reply(
     `✅ <b>Подписка оформлена!</b>\n\nТеперь вы будете получать уведомления о заказах и ежедневный отчёт.\n\n/stop — отписаться\n/report — отчёт прямо сейчас`,
     { parse_mode: 'HTML' },
   );
+  try {
+    await addSubscriber(ctx.chat.id);
+    console.log(`Subscriber added: ${ctx.chat.id}`);
+  } catch (err: any) {
+    console.error('Failed to save subscriber:', err.message);
+  }
 });
 
 bot.command('stop', async (ctx) => {
-  await removeSubscriber(ctx.chat.id);
   await ctx.reply('🔕 Вы отписались от уведомлений. Напишите /start чтобы подписаться снова.');
+  try {
+    await removeSubscriber(ctx.chat.id);
+  } catch (err: any) {
+    console.error('Failed to remove subscriber:', err.message);
+  }
 });
 
 bot.command('report', async (ctx) => {
@@ -284,8 +294,8 @@ async function main() {
     resolve();
   }));
 
-  // 2. Bot launch (non-blocking Telegram polling)
-  bot.launch();
+  // 2. Bot launch
+  bot.launch().catch((err) => console.error('Bot launch error:', err.message));
   console.log('Info Bot is running 🚀');
 
   // 3. Async init in background — does not block healthcheck
