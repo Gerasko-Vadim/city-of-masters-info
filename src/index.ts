@@ -294,7 +294,13 @@ async function main() {
     resolve();
   }));
 
-  // 2. Bot launch
+  // 2. Delete webhook (in case it was set before), then launch polling
+  try {
+    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+    console.log('Webhook deleted');
+  } catch (err: any) {
+    console.error('deleteWebhook error:', err.message);
+  }
   bot.launch().catch((err) => console.error('Bot launch error:', err.message));
   console.log('Info Bot is running 🚀');
 
