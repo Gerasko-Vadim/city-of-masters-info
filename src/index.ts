@@ -294,33 +294,32 @@ function connectSocket() {
   socket.on('disconnect', (reason) => console.log('⚡ Socket.io disconnected:', reason));
   socket.on('connect_error', (err) => console.error('Socket.io error:', err.message));
 
-  // New order — emitted by backend after create
-  socket.on('admin_notification', async (data: any) => {
-    if (data.type !== 'NEW_ORDER' || !ready) return;
-    if (orderStatusMap.has(Number(data.orderId))) return; // already known
-    try {
-      const { rows } = await pool.query('SELECT * FROM "order" WHERE id = $1', [data.orderId]);
-      const o = rows[0];
-      if (o) {
-        orderStatusMap.set(o.id, o.status);
-        await broadcast(fmtNewOrder(o));
-      }
-    } catch {
-      orderStatusMap.set(Number(data.orderId), 'NEW');
-      await broadcast(`📦 <b>Новый заказ #${data.orderId}</b>\n👤 ${data.customerName}`);
-    }
-  });
-
-  // Status transitions
   socket.on('orderUpdate', async (order: any) => {
     if (!ready) return;
+
     const prevStatus = orderStatusMap.get(order.id);
     const newStatus: string = order.status;
     orderStatusMap.set(order.id, newStatus);
 
-    if (!prevStatus || prevStatus === newStatus) return;
+    // No change
+    if (prevStatus === newStatus) return;
 
     try {
+      if (prevStatus === undefined) {
+        // Brand new order (not in preloaded map = just created)
+        if (newStatus === 'NEW') {
+          // Fetch full order from DB for complete details
+          try {
+            const { rows } = await pool.query('SELECT * FROM "order" WHERE id = $1', [order.id]);
+            await broadcast(fmtNewOrder(rows[0] ?? order));
+          } catch {
+            await broadcast(fmtNewOrder(order));
+          }
+        }
+        return;
+      }
+
+      // Known order — status transition
       if (newStatus === 'PAID') {
         await broadcast(fmtPaid(order));
       } else if (newStatus === 'IN_PROGRESS') {
