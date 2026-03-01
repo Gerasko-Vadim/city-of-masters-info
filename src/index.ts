@@ -145,24 +145,24 @@ async function getSpecialist(telegramId: string | number) {
 // ── Report ────────────────────────────────────────────────────────────────────
 
 function periodStart(period: 'today' | 'week' | 'month'): Date {
-  const now = new Date();
-  // Get current date in Bishkek timezone
-  const bskStr = now.toLocaleString('en-US', { timeZone: 'Asia/Bishkek' });
-  const bsk = new Date(bskStr);
+  // Bishkek = UTC+6
+  const BSK = 6 * 60 * 60 * 1000;
+  const bskNow = new Date(Date.now() + BSK);
+
+  const y   = bskNow.getUTCFullYear();
+  const mon = bskNow.getUTCMonth();
+  const d   = bskNow.getUTCDate();
+  const dow = bskNow.getUTCDay(); // 0=Sun
 
   if (period === 'today') {
-    bsk.setHours(0, 0, 0, 0);
-  } else if (period === 'week') {
-    bsk.setHours(0, 0, 0, 0);
-    bsk.setDate(bsk.getDate() - bsk.getDay() + (bsk.getDay() === 0 ? -6 : 1)); // Mon
-  } else {
-    bsk.setHours(0, 0, 0, 0);
-    bsk.setDate(1);
+    return new Date(Date.UTC(y, mon, d) - BSK);
   }
-
-  // Convert Bishkek time back to UTC
-  const utcOffset = now.getTime() - new Date(bskStr).getTime();
-  return new Date(bsk.getTime() + utcOffset);
+  if (period === 'week') {
+    const daysBack = dow === 0 ? 6 : dow - 1; // back to Monday
+    return new Date(Date.UTC(y, mon, d - daysBack) - BSK);
+  }
+  // month
+  return new Date(Date.UTC(y, mon, 1) - BSK);
 }
 
 function periodLabel(period: 'today' | 'week' | 'month'): string {
@@ -174,30 +174,53 @@ function periodLabel(period: 'today' | 'week' | 'month'): string {
   return now.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric', timeZone: 'Asia/Bishkek' });
 }
 
+async function safeCount(sql: string, params: any[]): Promise<number> {
+  try {
+    const res = await pool.query(sql, params);
+    return res.rows.length;
+  } catch (err: any) {
+    console.error('Query failed:', sql, err.message);
+    return 0;
+  }
+}
+
 async function buildReport(period: 'today' | 'week' | 'month'): Promise<string> {
   const since = periodStart(period);
   console.log(`Building report [${period}] since:`, since.toISOString());
 
-  // Run queries one by one so we know which one fails
-  const ordersRes   = await pool.query(`SELECT status FROM "order" WHERE "createdAt" >= $1`, [since]);
-  const specsRes    = await pool.query(`SELECT id FROM specialists WHERE "createdAt" >= $1`, [since]);
-
-  // client table: try both possible names
-  let clientsRes;
+  // Orders — fetch with status
+  let orders: any[] = [];
   try {
-    clientsRes = await pool.query(`SELECT id FROM client WHERE "createdAt" >= $1`, [since]);
-  } catch {
-    clientsRes = await pool.query(`SELECT id FROM clients WHERE "createdAt" >= $1`, [since]);
+    const res = await pool.query(
+      `SELECT status FROM "order" WHERE "createdAt" >= $1`, [since]
+    );
+    orders = res.rows;
+  } catch (err: any) {
+    console.error('Orders query failed:', err.message);
   }
 
-  const orders     = ordersRes.rows;
   const total      = orders.length;
   const newCount   = orders.filter((o) => o.status === 'NEW').length;
   const paid       = orders.filter((o) => ['PAID', 'IN_PROGRESS', 'COMPLETED'].includes(o.status)).length;
   const inProgress = orders.filter((o) => o.status === 'IN_PROGRESS').length;
   const completed  = orders.filter((o) => o.status === 'COMPLETED').length;
-  const newSpecs   = specsRes.rows.length;
-  const newClients = clientsRes.rows.length;
+
+  // Specialists — try both column name variants
+  const newSpecs = await safeCount(`SELECT id FROM specialists WHERE "createdAt" >= $1`, [since])
+    || await safeCount(`SELECT id FROM specialists WHERE created_at >= $1`, [since]);
+
+  // Clients — try both table names and both column names
+  let newClients = 0;
+  for (const tbl of ['client', 'clients']) {
+    for (const col of ['"createdAt"', 'created_at']) {
+      try {
+        const res = await pool.query(`SELECT id FROM ${tbl} WHERE ${col} >= $1`, [since]);
+        newClients = res.rows.length;
+        break;
+      } catch { /* try next */ }
+    }
+    if (newClients > 0) break;
+  }
 
   return (
     `📊 <b>Отчёт за ${periodLabel(period)}</b>\n\n` +
@@ -319,7 +342,7 @@ async function handleReport(ctx: any, period: 'today' | 'week' | 'month') {
     await ctx.reply(msg, { parse_mode: 'HTML', ...reportKeyboard });
   } catch (err: any) {
     console.error('Report error:', err.message);
-    await ctx.reply(`❌ Ошибка: ${err.message}`);
+    await ctx.reply('❌ Не удалось сформировать отчёт. Попробуйте позже.');
   }
 }
 
