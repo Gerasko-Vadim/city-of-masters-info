@@ -295,23 +295,6 @@ bot.start(async (ctx) => {
   }
 });
 
-bot.hears('📊 Отчёт', async (ctx) => {
-  await ctx.reply('📊 Выберите период:', reportKeyboard);
-});
-
-bot.hears('🔕 Отписаться', async (ctx) => {
-  await ctx.reply('🔕 Вы отписались от уведомлений.\n\nНапишите /start чтобы подписаться снова.', Markup.removeKeyboard());
-  try {
-    await removeSubscriber(ctx.chat.id);
-  } catch (err: any) {
-    console.error('Failed to remove subscriber:', err.message);
-  }
-});
-
-bot.hears('← Назад', async (ctx) => {
-  await ctx.reply('Главное меню:', { ...mainKeyboard });
-});
-
 async function handleReport(ctx: any, period: 'today' | 'week' | 'month') {
   await ctx.reply('⏳ Генерирую отчёт...');
   try {
@@ -323,9 +306,30 @@ async function handleReport(ctx: any, period: 'today' | 'week' | 'month') {
   }
 }
 
-bot.hears('📅 Сегодня', (ctx) => handleReport(ctx, 'today'));
-bot.hears('📆 Неделя',  (ctx) => handleReport(ctx, 'week'));
-bot.hears('🗓 Месяц',   (ctx) => handleReport(ctx, 'month'));
+bot.on('text', async (ctx) => {
+  const text = ctx.message.text;
+  console.log('Received text:', JSON.stringify(text));
+
+  if (text.includes('Отчёт') || text.includes('Отчет')) {
+    await ctx.reply('📊 Выберите период:', reportKeyboard);
+
+  } else if (text.includes('Отписаться')) {
+    await ctx.reply('🔕 Вы отписались от уведомлений.\n\nНапишите /start чтобы подписаться снова.', Markup.removeKeyboard());
+    try { await removeSubscriber(ctx.chat.id); } catch {}
+
+  } else if (text.includes('Назад')) {
+    await ctx.reply('Главное меню:', { ...mainKeyboard });
+
+  } else if (text.includes('Сегодня')) {
+    await handleReport(ctx, 'today');
+
+  } else if (text.includes('Неделя') || text.includes('неделя')) {
+    await handleReport(ctx, 'week');
+
+  } else if (text.includes('Месяц') || text.includes('месяц')) {
+    await handleReport(ctx, 'month');
+  }
+});
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
