@@ -71,6 +71,11 @@ async function broadcast(text: string) {
 
 // ── Notification formatters ───────────────────────────────────────────────────
 
+function fmtSource(o: any): string {
+  const src = o.source ?? o.source;
+  return src === 'ADMIN' ? '👨‍💼 Источник: Администратор' : '📱 Источник: Клиент';
+}
+
 function fmtNewOrder(o: any) {
   const time = new Date().toLocaleTimeString('ru-RU', {
     hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Bishkek',
@@ -80,7 +85,8 @@ function fmtNewOrder(o: any) {
     `👤 ${o.customerName ?? o.customer_name}\n` +
     `📞 ${o.phone || '—'}\n` +
     `📍 ${o.address}\n` +
-    `💰 Сумма: <b>${o.totalAmount ?? o.total_amount} сом</b>`
+    `💰 Сумма: <b>${o.totalAmount ?? o.total_amount} сом</b>\n` +
+    `${fmtSource(o)}`
   );
 }
 
@@ -90,7 +96,8 @@ function fmtPaid(o: any) {
     `👤 ${o.customerName ?? o.customer_name}\n` +
     `📞 ${o.phone || '—'}\n` +
     `📍 ${o.address}\n` +
-    `💰 ${o.totalAmount ?? o.total_amount} сом  •  комиссия ${o.commission} сом\n\n` +
+    `💰 ${o.totalAmount ?? o.total_amount} сом  •  комиссия ${o.commission} сом\n` +
+    `${fmtSource(o)}\n\n` +
     `🔍 Поиск мастера запущен...`
   );
 }
@@ -188,11 +195,11 @@ async function buildReport(period: 'today' | 'week' | 'month'): Promise<string> 
   const since = periodStart(period);
   console.log(`Building report [${period}] since:`, since.toISOString());
 
-  // Orders — fetch with status
+  // Orders — fetch with status and source
   let orders: any[] = [];
   try {
     const res = await pool.query(
-      `SELECT status FROM "order" WHERE "createdAt" >= $1`, [since]
+      `SELECT status, source FROM "order" WHERE "createdAt" >= $1`, [since]
     );
     orders = res.rows;
   } catch (err: any) {
@@ -204,6 +211,8 @@ async function buildReport(period: 'today' | 'week' | 'month'): Promise<string> 
   const paid       = orders.filter((o) => ['PAID', 'IN_PROGRESS', 'COMPLETED'].includes(o.status)).length;
   const inProgress = orders.filter((o) => o.status === 'IN_PROGRESS').length;
   const completed  = orders.filter((o) => o.status === 'COMPLETED').length;
+  const fromClient = orders.filter((o) => o.source === 'CLIENT').length;
+  const fromAdmin  = orders.filter((o) => o.source === 'ADMIN').length;
 
   // Specialists — try both column name variants
   const newSpecs = await safeCount(`SELECT id FROM specialists WHERE "createdAt" >= $1`, [since])
@@ -229,6 +238,8 @@ async function buildReport(period: 'today' | 'week' | 'month'): Promise<string> 
     `✅ Оплачено:           <b>${paid}</b>\n` +
     `🔧 В работе:           <b>${inProgress}</b>\n` +
     `🏁 Завершено:          <b>${completed}</b>\n\n` +
+    `📱 С мини-апп (клиент): <b>${fromClient}</b>\n` +
+    `👨‍💼 С админки:            <b>${fromAdmin}</b>\n\n` +
     `👷 Новых мастеров:  <b>${newSpecs}</b>\n` +
     `👤 Новых клиентов:  <b>${newClients}</b>`
   );
