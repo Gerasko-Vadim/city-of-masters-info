@@ -72,58 +72,70 @@ async function broadcast(text: string) {
 // ── Notification formatters ───────────────────────────────────────────────────
 
 function fmtSource(o: any): string {
-  const src = o.source ?? o.source;
-  return src === 'ADMIN' ? '👨‍💼 Источник: Администратор' : '📱 Источник: Клиент';
+  return (o.source ?? '') === 'ADMIN' ? '👨‍💼 Источник: Администратор' : '📱 Источник: Клиент';
+}
+
+// Extracts price range from description, e.g. "Стоимость: 400–600 сом" → "от 400–600 сом"
+function fmtServiceCost(o: any): string {
+  const desc: string = o.description ?? '';
+  const match = desc.match(/Стоимость:\s*(.+)/);
+  return match ? `💵 Стоимость услуг: <b>от ${match[1].trim()}</b>` : '';
 }
 
 function fmtNewOrder(o: any) {
   const time = new Date().toLocaleTimeString('ru-RU', {
     hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Bishkek',
   });
+  const costLine = fmtServiceCost(o);
   return (
     `📦 <b>Новый заказ #${o.id}</b>  •  ${time}\n\n` +
     `👤 ${o.customerName ?? o.customer_name}\n` +
     `📞 ${o.phone || '—'}\n` +
     `📍 ${o.address}\n` +
-    `💰 Сумма: <b>${o.totalAmount ?? o.total_amount} сом</b>\n` +
-    `${fmtSource(o)}`
+    (costLine ? `${costLine}\n` : '') +
+    fmtSource(o)
   );
 }
 
 function fmtPaid(o: any) {
+  const costLine = fmtServiceCost(o);
   return (
     `✅ <b>Заказ #${o.id} оплачен!</b>\n\n` +
     `👤 ${o.customerName ?? o.customer_name}\n` +
     `📞 ${o.phone || '—'}\n` +
     `📍 ${o.address}\n` +
-    `💰 ${o.totalAmount ?? o.total_amount} сом  •  комиссия ${o.commission} сом\n` +
+    (costLine ? `${costLine}\n` : '') +
     `${fmtSource(o)}\n\n` +
     `🔍 Поиск мастера запущен...`
   );
 }
 
 function fmtInProgress(o: any, spec: any) {
-  const specLine = spec
-    ? `\n\n👷 <b>${spec.name}</b>` +
+  const costLine = fmtServiceCost(o);
+  const specBlock = spec
+    ? `\n\n👷 Мастер: <b>${spec.fullName ?? spec.name}</b>` +
       (spec.username ? ` (@${spec.username})` : '') +
       (spec.phone ? `\n📞 ${spec.phone}` : '')
-    : (o.assignedSpecialistId ? `\n\n👷 Мастер ID: ${o.assignedSpecialistId}` : '');
+    : o.assignedSpecialistId
+      ? `\n\n👷 Мастер ID: ${o.assignedSpecialistId}`
+      : '';
   return (
     `🔧 <b>Заказ #${o.id} взят в работу!</b>\n\n` +
     `👤 ${o.customerName ?? o.customer_name}\n` +
     `📍 ${o.address}\n` +
-    `💰 ${o.totalAmount ?? o.total_amount} сом` +
-    specLine
+    (costLine ? `${costLine}\n` : '') +
+    specBlock
   );
 }
 
 function fmtCompleted(o: any, spec: any) {
+  const costLine = fmtServiceCost(o);
   return (
     `🏁 <b>Заказ #${o.id} завершён!</b>\n\n` +
     `👤 ${o.customerName ?? o.customer_name}\n` +
     `📍 ${o.address}\n` +
-    `💰 ${o.totalAmount ?? o.total_amount} сом  •  комиссия ${o.commission} сом` +
-    (spec ? `\n👷 Мастер: ${spec.name}` : '')
+    (costLine ? `${costLine}\n` : '') +
+    (spec ? `👷 Мастер: <b>${spec.fullName ?? spec.name}</b>` : '')
   );
 }
 
@@ -330,19 +342,24 @@ function connectSocket() {
         return;
       }
 
+      // Fetch full order from DB to get description, assignedSpecialistId etc.
+      let fullOrder = order;
+      try {
+        const { rows } = await pool.query('SELECT * FROM "order" WHERE id = $1', [order.id]);
+        if (rows[0]) fullOrder = rows[0];
+      } catch { /* fallback to socket data */ }
+
       // Known order — status transition
       if (newStatus === 'PAID') {
-        await broadcast(fmtPaid(order));
+        await broadcast(fmtPaid(fullOrder));
       } else if (newStatus === 'IN_PROGRESS') {
-        const spec = order.assignedSpecialistId
-          ? await getSpecialist(order.assignedSpecialistId)
-          : null;
-        await broadcast(fmtInProgress(order, spec));
+        const specialistId = fullOrder.assignedSpecialistId ?? fullOrder.assigned_specialist_id;
+        const spec = specialistId ? await getSpecialist(specialistId) : null;
+        await broadcast(fmtInProgress(fullOrder, spec));
       } else if (newStatus === 'COMPLETED') {
-        const spec = order.assignedSpecialistId
-          ? await getSpecialist(order.assignedSpecialistId)
-          : null;
-        await broadcast(fmtCompleted(order, spec));
+        const specialistId = fullOrder.assignedSpecialistId ?? fullOrder.assigned_specialist_id;
+        const spec = specialistId ? await getSpecialist(specialistId) : null;
+        await broadcast(fmtCompleted(fullOrder, spec));
       }
     } catch (err: any) {
       console.error('Broadcast error:', err.message);
