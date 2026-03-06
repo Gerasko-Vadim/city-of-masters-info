@@ -230,6 +230,20 @@ async function buildReport(period: 'today' | 'week' | 'month'): Promise<string> 
   const newSpecs = await safeCount(`SELECT id FROM specialists WHERE "createdAt" >= $1`, [since])
     || await safeCount(`SELECT id FROM specialists WHERE created_at >= $1`, [since]);
 
+  // Registered specialists (filled fullName) in period
+  const registeredSpecs = await safeCount(
+    `SELECT id FROM specialists WHERE "fullName" IS NOT NULL AND "fullName" != '' AND "createdAt" >= $1`, [since]
+  ) || await safeCount(
+    `SELECT id FROM specialists WHERE "fullName" IS NOT NULL AND "fullName" != '' AND created_at >= $1`, [since]
+  );
+
+  // Total registered specialists (all time)
+  let totalRegistered = 0;
+  try {
+    const res = await pool.query(`SELECT COUNT(*) FROM specialists WHERE "fullName" IS NOT NULL AND "fullName" != ''`);
+    totalRegistered = Number(res.rows[0]?.count ?? 0);
+  } catch {}
+
   // Clients — try both table names and both column names
   let newClients = 0;
   for (const tbl of ['client', 'clients']) {
@@ -252,8 +266,10 @@ async function buildReport(period: 'today' | 'week' | 'month'): Promise<string> 
     `🏁 Завершено:          <b>${completed}</b>\n\n` +
     `📱 С мини-апп (клиент): <b>${fromClient}</b>\n` +
     `👨‍💼 С админки:            <b>${fromAdmin}</b>\n\n` +
-    `👷 Новых мастеров:  <b>${newSpecs}</b>\n` +
-    `👤 Новых клиентов:  <b>${newClients}</b>`
+    `👷 Новых мастеров:           <b>${newSpecs}</b>\n` +
+    `✅ Зарегистрировались:       <b>${registeredSpecs}</b>\n` +
+    `👥 Всего зарег. мастеров:   <b>${totalRegistered}</b>\n` +
+    `👤 Новых клиентов:           <b>${newClients}</b>`
   );
 }
 
@@ -316,6 +332,24 @@ function connectSocket() {
   socket.on('connect', () => console.log('✅ Socket.io connected'));
   socket.on('disconnect', (reason) => console.log('⚡ Socket.io disconnected:', reason));
   socket.on('connect_error', (err) => console.error('Socket.io error:', err.message));
+
+  socket.on('specialistUpdate', async (spec: any) => {
+    if (!ready || spec._event !== 'registered') return;
+    try {
+      const time = new Date().toLocaleTimeString('ru-RU', {
+        hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Bishkek',
+      });
+      const msg =
+        `👷 <b>Новый мастер зарегистрирован!</b>  •  ${time}\n\n` +
+        `👤 ${spec.fullName}\n` +
+        `📞 ${spec.phone || '—'}\n` +
+        (spec.username ? `🔗 @${spec.username}\n` : '') +
+        `🆔 Telegram ID: ${spec.telegramId}`;
+      await broadcast(msg);
+    } catch (err: any) {
+      console.error('specialistUpdate broadcast error:', err.message);
+    }
+  });
 
   socket.on('orderUpdate', async (order: any) => {
     if (!ready) return;
