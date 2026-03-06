@@ -489,7 +489,34 @@ async function main() {
 
   // 1. Start Express FIRST so Railway healthcheck passes immediately
   const app = express();
+  app.use(express.json());
   app.get('/health', (_, res) => res.json({ status: 'ok', ready, orders: orderStatusMap.size }));
+
+  // Internal webhook — called by backend when master registers
+  app.post('/internal/master-registered', async (req, res) => {
+    const secret = req.headers['x-internal-secret'];
+    if (secret !== process.env.INTERNAL_SECRET) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    const spec = req.body;
+    res.json({ ok: true });
+    try {
+      const time = new Date().toLocaleTimeString('ru-RU', {
+        hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Bishkek',
+      });
+      const msg =
+        `👷 <b>Новый мастер зарегистрирован!</b>  •  ${time}\n\n` +
+        `👤 ${spec.fullName}\n` +
+        `📞 ${spec.phone || '—'}\n` +
+        (spec.username ? `🔗 @${spec.username}\n` : '') +
+        `🆔 Telegram ID: ${spec.telegramId}`;
+      await broadcast(msg);
+    } catch (err: any) {
+      console.error('master-registered broadcast error:', err.message);
+    }
+  });
+
   const PORT = process.env.PORT || 3005;
   await new Promise<void>((resolve) => app.listen(PORT, () => {
     console.log(`Health check on :${PORT}`);
